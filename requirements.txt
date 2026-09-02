@@ -1,0 +1,16 @@
+certifi==2026.7.22
+charset-normalizer==3.5.1
+fast_simplification==0.2.0
+idna==3.19
+lxml==6.1.2
+manifold3d==3.5.2
+mapbox_earcut==2.0.0
+networkx==3.6.1
+numpy==2.5.2
+pillow==12.3.0
+requests==2.34.2
+rtree==1.4.1
+scipy==1.18.1
+shapely==2.1.2
+trimesh==5.0.0
+urllib3==2.7.0

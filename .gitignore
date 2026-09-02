@@ -1,0 +1,14 @@
+# virtualenv
+.venv/
+__pycache__/
+*.pyc
+
+# regenerable: Overpass responses and Terrarium DEM tiles
+cache/
+
+# regenerable: generated tile sets (25 MB of STL/3MF)
+out/
+out_*/
+*.stl
+*.3mf
+!docs/*.png
