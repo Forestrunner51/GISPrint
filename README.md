@@ -24,6 +24,34 @@ python3 -m venv .venv
 .venv/bin/python -m tilemaker --center 40.7484,-73.9857 --grid 3x3 \
     --joint magnet --magnet-mode embed
 
+# framed land-only piece: water left unprinted, piers kept
+.venv/bin/python -m tilemaker --center 40.7075,-74.0090 --grid 1x1 --tile 190 \
+    --span 1600 --joint none --water --printer ender3v3se --out out_lower_manhattan
+
+# pixel-art style: the city snapped to a grid of 2.5 mm cube columns
+.venv/bin/python -m tilemaker --center 40.7045,-74.0125 --grid 1x1 --tile 150 \
+    --span 800 --joint none --water --style pixel --pixel 2.5 --base-h 2.5 \
+    --max-bld-h 30 --printer ender3v3se --out out_pixel_lower_manhattan
+
+# lithophane of the city: a 3 mm backlit plate, water and streets glow
+.venv/bin/python -m tilemaker --center 40.7075,-74.0090 --grid 1x1 --tile 150 \
+    --span 1600 --joint none --water --style lithophane --printer ender3v3se \
+    --out out_lithophane_lower_manhattan
+
+# heart-shaped map lithophane: border follows the shape, water still glows
+.venv/bin/python -m tilemaker --center 40.7075,-74.0090 --grid 1x1 --tile 150 \
+    --span 1600 --joint none --water --shape heart --style lithophane \
+    --printer ender3v3se --out out_lithophane_heart_lower_manhattan
+
+# lithophane of any photo
+.venv/bin/python -m tilemaker.lithophane photo.jpg --width 150 --out out_lithophane
+
+# cut to a shape (heart, circle, hexagon) or to a named outline
+.venv/bin/python -m tilemaker --center 40.7075,-74.0090 --grid 1x1 --tile 190 \
+    --span 1600 --joint none --water --shape heart --out out_heart
+.venv/bin/python -m tilemaker --outline "Roosevelt Island, New York" --grid 1x1 \
+    --tile 190 --joint none --out out_roosevelt
+
 # with terrain
 .venv/bin/python -m tilemaker --center 37.8024,-122.4058 --grid 2x2 --terrain \
     --joint magnet --magnet-mode embed --out out_sf
@@ -220,5 +248,31 @@ whole set.
 - Terrain mode leaves ~1% of surface as unsupported overhang (road-channel
   floors and building undersides on slopes). Printable, but budget supports or
   raise `--road-depth` toward 0.
-- No water or park polygons, no per-tile edge labels, no multi-material inlay.
-- Plate layout assumes a 256×256 bed (`threemf.PLATE`); edit for a 250×210 Prusa.
+- No park polygons, no per-tile edge labels, no multi-material inlay.
+- `--water` cuts coastline, rivers and lakes out of the land and keeps piers,
+  for a single-colour print over a coloured backing board. Bridges are not
+  kept, so land joined only by a bridge prints as a separate piece. Ponds
+  under 15 mm² are ignored. The water query returns full multipolygon
+  geometry and took ~200 s for San Francisco (cached after that).
+- `--style pixel` (`pixel.py`) builds the surface directly from a height
+  grid instead of by CSG: unioning thousands of coplanar cube walls left
+  non-manifold edges however the slabs were offset. Checkerboard 2x2 cells
+  are bridged first so the surface never pinches. Flat sets with
+  `--joint none` only, no terrain or route yet. Pick `--span` so one cell
+  is roughly a street wide (~10 m); at 20 m per cell streets dissolve.
+- Lithophanes (`lithophane.py`) are 0.8-3.0 mm plates with a 3 mm solid
+  border, printed flat with the relief up and viewed from that side, so the
+  image is not mirrored. White PLA, 100% infill (infill shows through the
+  light), 0.12-0.16 mm layers. The thickness-to-brightness curve is linear
+  with a `--gamma` knob; it has not been calibrated against a real print yet.
+- `--shape` / `--outline` (`shapes.py`) treat everything outside the shape as
+  water. Outlines come from Nominatim and auto-fit centre and span; anything
+  needing more than 4 km per tile is refused (buildings below nozzle size,
+  Overpass timeouts), so a state or country is not a city-map product.
+- Water and shape cuts are applied to the finished tile in one boolean pass.
+  Clipping the base and the buildings to a curved shore separately gave two
+  walls on one line that disagree by float noise: 2-6 four-face edges per
+  shaped tile. One cut: zero, on every shaped and water test.
+- A dense block can still leave one edge where two buildings meet exactly
+  (4 faces on one edge after STL/3MF vertex merging). Seen on 2 of 6 test
+  tiles; it is a touching line, not a hole, and slicers accept it.

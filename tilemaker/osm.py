@@ -73,6 +73,26 @@ def fetch(bbox, want_roads=True, relations=False) -> dict:
     return _cached(_query(bbox, want_roads, False))
 
 
+def fetch_water(bbox) -> dict:
+    """Coastline, water areas and piers, in their own query and cache entry.
+
+    Kept apart from the building query so a set built without --water costs
+    nothing extra and its cache entries stay valid. Relations come back with
+    full member geometry, not clipped to the bbox: clipping breaks the rings
+    we need to reassemble, and a river multipolygon is far lighter than a
+    building one.
+    """
+    s, w, n, e = bbox
+    b = f"{s},{w},{n},{e}"
+    q = (f"[out:json][timeout:180];("
+         f"way[natural=coastline]({b});"
+         f"way[natural=water]({b});relation[natural=water]({b});"
+         f"way[waterway=riverbank]({b});relation[waterway=riverbank]({b});"
+         f"way[man_made=pier]({b});"
+         f");out geom;")
+    return _cached(q)
+
+
 _NUM = re.compile(r"[-+]?\d*\.?\d+")
 
 

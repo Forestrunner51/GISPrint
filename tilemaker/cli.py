@@ -1,7 +1,7 @@
 """End-to-end: OSM + DEM -> print-ready modular map tiles."""
 import argparse, json, math, os, sys, time
 import numpy as np
-from .osm import fetch
+from .osm import fetch, fetch_water
 from .project import LocalPlane
 from .geometry import buildings_mm, roads_mm
 from .build import build_tile, report
@@ -39,6 +39,17 @@ def main(argv=None):
     p.add_argument("--pocket-teardrop", action="store_true",
                    help="peaked pocket roof: no unsupported arch, taller base")
     p.add_argument("--lowpoly", action="store_true", help="stylised low-poly finish")
+    p.add_argument("--style", choices=["classic", "pixel", "lithophane"],
+                   default="classic",
+                   help="pixel: square block columns. lithophane: a thin backlit "
+                        "plate, water and streets glow, buildings dark")
+    p.add_argument("--litho-px", type=float, default=0.3, help="lithophane relief resolution, mm")
+    p.add_argument("--litho-min", type=float, default=0.8, help="lithophane thinnest, mm")
+    p.add_argument("--litho-max", type=float, default=3.0, help="lithophane thickest, mm")
+    p.add_argument("--litho-border", type=float, default=3.0, help="lithophane solid frame, mm")
+    p.add_argument("--pixel", type=float, default=2.0, help="pixel-style cell, mm")
+    p.add_argument("--pixel-step", type=float, default=0.0,
+                   help="pixel-style height quantum, mm (0 = cell size: cubes)")
     p.add_argument("--simplify", type=float, default=0.35, help="mm, Douglas-Peucker")
     p.add_argument("--height-step", type=float, default=1.5, help="mm height quantum")
     p.add_argument("--merge-gap", type=float, default=0.6, help="mm, block merging")
@@ -51,6 +62,13 @@ def main(argv=None):
     p.add_argument("--dem-zoom", type=int, default=15, help="15 ~ 3.8 m/px")
     p.add_argument("--terrain-grid", type=int, default=96, help="samples per tile edge")
     p.add_argument("--dem-smooth", type=float, default=1.0, help="DEM blur, px")
+    p.add_argument("--water", action="store_true",
+                   help="leave rivers, lakes and sea unprinted (land-only tiles "
+                        "for a coloured backing board); piers are kept")
+    p.add_argument("--shape", choices=["square", "circle", "heart", "hexagon"],
+                   default="square", help="cut the whole set to this shape")
+    p.add_argument("--outline", help="cut the set to a named OSM area, e.g. "
+                                     "'Roosevelt Island' -- also centres and sizes it")
     p.add_argument("--relations", action="store_true",
                    help="include building multipolygons (slow, 504s on large areas)")
     p.add_argument("--format", choices=["stl", "3mf", "both"], default="both")
@@ -70,11 +88,23 @@ def main(argv=None):
         (lat, lon), a.span = routemod.fit_grid(pts, cols, rows)
         print(f"route: {len(pts)} points, {routemod.length_m(pts)/1000:.2f} km -> "
               f"grid fitted at {lat:.5f},{lon:.5f}, span {a.span:.0f} m/tile")
+    elif a.outline:
+        from .shapes import lookup_outline, outline_fit
+        hit = lookup_outline(a.outline)
+        (lat, lon), a.span = outline_fit(hit, cols, rows)
+        print(f"outline: {hit['name']}\n  -> centred {lat:.5f},{lon:.5f}, "
+              f"span {a.span:.0f} m/tile")
+        if a.span > 4000:
+            p.error(f"outline needs {a.span/1000:.1f} km per tile: buildings would be "
+                    f"far below nozzle size and Overpass would time out. Pick a "
+                    f"smaller area (a neighbourhood, island or park).")
     elif a.center:
         lat, lon = [float(v) for v in a.center.split(",")]
     else:
-        p.error("give --center, --route or --route-gpx")
+        p.error("give --center, --outline, --route or --route-gpx")
 
+    if a.style != "classic" and (a.terrain or a.joint != "none" or pts):
+        p.error(f"--style {a.style} supports flat sets with --joint none, no route yet")
     if a.joint == "magnet":
         need = min_base_height(a.magnet_d, floor=a.magnet_floor)
         if a.pocket_teardrop:
@@ -137,6 +167,36 @@ def main(argv=None):
               f"footprint vertices {st['footprint_vertices'][0]} -> "
               f"{st['footprint_vertices'][1]} "
               f"({100*(1-st['footprint_vertices'][1]/max(st['footprint_vertices'][0],1)):.0f}% cut)")
+    water = shape_cut = None
+    if a.water:
+        from shapely.geometry import box as _box
+        from .water import water_mm
+        t = time.time()
+        wels = fetch_water(bbox)["elements"]
+        region = _box(-cols * a.tile / 2.0, -rows * a.tile / 2.0,
+                      cols * a.tile / 2.0, rows * a.tile / 2.0)
+        water, n_piers = water_mm(wels, plane, scale, region, min_wall=a.min_wall)
+        pct = 0.0 if water is None else 100.0 * water.area / region.area
+        print(f"water: {len(wels)} elements, {pct:.0f}% of the set is water, "
+              f"{n_piers} piers kept, {time.time()-t:.1f}s")
+    if a.shape != "square" or a.outline:
+        from shapely.geometry import box as _box
+        from .shapes import preset, outline_mm
+        from .water import clean
+        region = _box(-cols * a.tile / 2.0, -rows * a.tile / 2.0,
+                      cols * a.tile / 2.0, rows * a.tile / 2.0)
+        keep = outline_mm(hit, plane, scale) if a.outline else preset(a.shape, region)
+        if a.outline and a.shape != "square":
+            keep = keep.intersection(preset(a.shape, region))
+        outside = region.difference(keep)
+        # a lithophane keeps water as glowing plate and only cuts the shape
+        shape_cut = clean(region, outside, a.min_wall)
+        if a.style != "lithophane":
+            water = clean(region, outside if water is None else water.union(outside),
+                          a.min_wall)
+        print(f"shape: {a.outline or a.shape}, "
+              f"{100 * (shape_cut.area if shape_cut else 0) / region.area:.0f}% "
+              f"of the square cut away")
     ribbon = routemod.ribbon(pts, plane, scale, a.route_w) if pts else None
     print(f"geometry: {len(blds)} buildings, roads={'yes' if roads else 'no'}"
           + (", route ridge" if ribbon is not None else ""))
@@ -176,10 +236,29 @@ def main(argv=None):
             cx = (i + 0.5) * a.tile - cols * a.tile / 2.0
             cy = (j + 0.5) * a.tile - rows * a.tile / 2.0
             t = time.time()
-            mesh = build_tile((cx, cy), a.tile, blds, roads, opts, relief=relief,
-                              route=ribbon)
-            mesh.apply_translation((-cx, -cy, 0))   # each tile prints at origin
+            if a.style == "lithophane":
+                from .lithophane import map_tile
+                # the plate is the whole tile: water glows instead of being cut
+                mesh = map_tile((cx, cy), a.tile, blds, roads, water, opts,
+                                cut=shape_cut)
+                if mesh is not None:
+                    mesh.metadata["buildings"] = len(blds)
+                    mesh.metadata["land_parts"] = mesh.body_count
+            elif a.style == "pixel":
+                from .pixel import build_pixel_tile
+                mesh, cols_up = build_pixel_tile((cx, cy), a.tile, blds, roads,
+                                                 water, opts)
+                if mesh is not None:
+                    mesh.metadata["buildings"] = cols_up
+                    mesh.metadata["land_parts"] = mesh.body_count
+            else:
+                mesh = build_tile((cx, cy), a.tile, blds, roads, opts, relief=relief,
+                                  route=ribbon, water=water)
             name = f"tile_r{j}c{i}"
+            if mesh is None:
+                print(f"--  {name}: all water, nothing to print")
+                continue
+            mesh.apply_translation((-cx, -cy, 0))   # each tile prints at origin
             if a.format in ("stl", "both"):
                 mesh.export(os.path.join(a.out, name + ".stl"))
             meshes.append((name, mesh))
@@ -190,7 +269,10 @@ def main(argv=None):
             # legitimate closed shell, so the expected body count is 1 + voids.
             voids = 8 if (a.joint == "magnet" and a.magnet_mode == "embed") else 0
             r["voids"] = voids
-            flag = "OK " if r["watertight"] and r["bodies"] == 1 + voids else "CHECK"
+            # With --water a tile can hold several separate landmasses (an
+            # island, a pier that only joins land off-tile): one body each.
+            land = mesh.metadata.get("land_parts", 1)
+            flag = "OK " if r["watertight"] and r["bodies"] <= land + voids else "CHECK"
             print(f"{flag} {name}: {r['buildings']:>3} bld  {r['triangles']:>6} tri  "
                   f"{r['volume_cm3']:>6} cm3  h={r['bbox_mm'][2]:>5} mm  {time.time()-t:.1f}s")
 

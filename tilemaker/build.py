@@ -3,6 +3,7 @@ import numpy as np
 import shapely
 import trimesh
 from shapely.geometry import box
+from shapely.ops import unary_union
 from . import joints
 
 ENGINE = "manifold"
@@ -20,6 +21,30 @@ def _extrude(poly, height, z0=0.0):
         m.apply_translation((0, 0, z0))
         meshes.append(m)
     return meshes
+
+
+def _extrude_area(poly, height, z0=0.0):
+    """Extrude a large, many-holed area (land mask, road network) via manifold.
+
+    trimesh's extrude goes non-manifold once a polygon has hundreds of holes
+    whose corners touch -- a city's road network at 1:8000 is exactly that,
+    and the subtraction then fails with "Not all meshes are volumes".
+    manifold's CrossSection keeps touching rings topologically separate.
+    process=False preserves that: merging coincident vertices would re-pinch
+    them.
+    """
+    import manifold3d as mf
+    rings = []
+    for part in getattr(poly, "geoms", [poly]):
+        if part.is_empty or part.area <= 0:
+            continue
+        rings.append(np.asarray(part.exterior.coords)[:-1])
+        rings += [np.asarray(r.coords)[:-1] for r in part.interiors]
+    if not rings:
+        return []
+    m = (mf.CrossSection(rings, mf.FillRule.EvenOdd)
+         .extrude(height).translate((0.0, 0.0, z0)).to_mesh())
+    return [trimesh.Trimesh(m.vert_properties[:, :3], m.tri_verts, process=False)]
 
 
 def _cyl(x, y, d, h, z0):
@@ -94,20 +119,36 @@ def heightfield_solid(xs, ys, ztop, z0=0.0):
     return trimesh.Trimesh(vertices=verts, faces=np.array(faces), process=True)
 
 
-def build_tile(centre, tile_mm, buildings, roads, opts, relief=None, route=None):
-    """One watertight tile. `relief(x, y) -> mm above datum` enables terrain."""
+def build_tile(centre, tile_mm, buildings, roads, opts, relief=None, route=None,
+               water=None):
+    """One watertight tile. `relief(x, y) -> mm above datum` enables terrain.
+
+    `water` (mm polygon) is left unprinted: the finished tile is cut down to
+    the land in one final pass, so nothing stands over open water. Returns
+    None when the tile is all water.
+    """
     cx, cy = centre
     half = tile_mm / 2.0
     square = box(cx - half, cy - half, cx + half, cy + half)
     base_h, rd = opts["base_h"], opts["road_depth"]
+    land = square
+    if water is not None:
+        # The tile edge can slice a shoreline into a sliver the region-level
+        # cleanup never saw; drop anything too thin to hold a wall.
+        keep = [g for g in getattr(square.difference(water), "geoms",
+                                   [square.difference(water)])
+                if g.area >= 1.0 and not g.buffer(-opts["min_wall"] / 2.0).is_empty]
+        if not keep:
+            return None
+        land = unary_union(keep)
 
     if relief is None:
-        base = trimesh.util.concatenate(_extrude(square, base_h))
+        base = _extrude_area(square, base_h)[0]
         road_cuts = []
         if roads is not None and rd > 0:
             clipped = roads.intersection(square)
             if not clipped.is_empty:
-                road_cuts = _extrude(clipped, rd + 0.2, z0=base_h - rd)
+                road_cuts = _extrude_area(clipped, rd + 0.2, z0=base_h - rd)
         surf = lambda px, py: np.full(np.shape(px), base_h, dtype=float)
         if route is not None:
             clipped = route.intersection(square)
@@ -186,8 +227,19 @@ def build_tile(centre, tile_mm, buildings, roads, opts, relief=None, route=None)
         n_bld += bool(parts)
 
     mesh = trimesh.boolean.union(solids, engine=ENGINE) if len(solids) > 1 else base
+    if water is not None:
+        # Cut water and shape outline out of the finished tile in one pass.
+        # Clipping base and buildings to the shore separately gave two walls
+        # on the same curved line that disagree by float noise -- edges with
+        # four faces once the STL is written. One cut makes one wall.
+        void = square.difference(land)
+        if not void.is_empty:
+            mesh = trimesh.boolean.difference(
+                [mesh] + _extrude_area(void.buffer(0.001, join_style=2), 1000.0,
+                                       z0=-1.0), engine=ENGINE)
     mesh = _clean(mesh)
     mesh.metadata["buildings"] = n_bld
+    mesh.metadata["land_parts"] = len(getattr(land, "geoms", [land]))
     return mesh
 
 
