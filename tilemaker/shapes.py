@@ -37,6 +37,33 @@ def preset(name, region, margin=0.02):
     raise ValueError(f"unknown shape {name!r}")
 
 
+def lookup_place(query):
+    """Centre point (lat, lon) and display name for a place name, cached.
+
+    Any hit will do -- a landmark, street, address or whole city -- because
+    only its centre is used. Nominatim's policy is one request a second with
+    an identifying User-Agent; the cache keeps reruns off the network.
+    """
+    key = hashlib.sha1(f"nominatim-point:{query}".encode()).hexdigest()[:16]
+    path = os.path.join(CACHE, f"{key}.json")
+    if os.path.exists(path):
+        with open(path) as fh:
+            return json.load(fh)
+    r = requests.get(NOMINATIM, params={"q": query, "format": "jsonv2", "limit": 1},
+                     headers=HEADERS, timeout=60)
+    r.raise_for_status()
+    hits = r.json()
+    if not hits:
+        raise RuntimeError(f"no place found for {query!r}; try adding the city "
+                           "or country, e.g. 'Eiffel Tower, Paris'")
+    hit = {"name": hits[0]["display_name"],
+           "lat": float(hits[0]["lat"]), "lon": float(hits[0]["lon"])}
+    os.makedirs(CACHE, exist_ok=True)
+    with open(path, "w") as fh:
+        json.dump(hit, fh)
+    return hit
+
+
 def lookup_outline(query):
     """Boundary polygon (lon/lat GeoJSON geometry) for a place name, cached."""
     key = hashlib.sha1(f"nominatim:{query}".encode()).hexdigest()[:16]

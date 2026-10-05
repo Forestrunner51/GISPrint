@@ -153,7 +153,7 @@ def main(argv=None):
     p.add_argument("--max", type=float, default=3.0, help="thickest (darkest), mm")
     p.add_argument("--border", type=float, default=3.0, help="solid frame, mm")
     p.add_argument("--gamma", type=float, default=1.0)
-    p.add_argument("--out", default="out_lithophane")
+    p.add_argument("--out", default=os.path.join("prints", "lithophane", "photos"))
     a = p.parse_args(argv)
     mesh = from_photo(a.image, a.width, a.px, a.min, a.max, a.border, a.gamma)
     os.makedirs(a.out, exist_ok=True)

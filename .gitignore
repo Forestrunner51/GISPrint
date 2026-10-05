@@ -9,6 +9,7 @@ cache/
 # regenerable: generated tile sets (25 MB of STL/3MF)
 out/
 out_*/
+prints/
 *.stl
 *.3mf
 !docs/*.png

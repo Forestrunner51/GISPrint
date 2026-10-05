@@ -11,9 +11,30 @@ from .joints import min_base_height
 from .threemf import write_project
 
 
+def _slug(text):
+    import re
+    return re.sub(r"[^a-z0-9]+", "-", text.lower().split(",")[0]).strip("-") or "map"
+
+
+def default_out(a):
+    """prints/<style>/<place>_<shape>_<size>mm[_<n>mm-blocks]."""
+    if a.coupon:
+        return os.path.join("prints", "tests", "joint-coupon")
+    place = (a.name or a.place or a.outline
+             or (a.center.replace(",", "_") if a.center else "route"))
+    parts = [_slug(place), "outline" if a.outline else a.shape, f"{a.tile:g}mm"]
+    if a.grid.lower() != "1x1":
+        parts.append(a.grid.lower())
+    if a.style == "pixel":
+        parts.append(f"{a.pixel:g}mm-blocks")
+    return os.path.join("prints", a.style, "_".join(parts))
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tilemaker")
     p.add_argument("--center", help="lat,lon of the map centre")
+    p.add_argument("--place", help="centre on a named place instead of lat,lon, "
+                                   "e.g. 'Eiffel Tower, Paris'")
     p.add_argument("--route-gpx", help="GPX track: fit the set to this route")
     p.add_argument("--route", help="'lat,lon;lat,lon;...' inline route")
     p.add_argument("--route-h", type=float, default=1.2, help="route ridge, mm")
@@ -76,8 +97,13 @@ def main(argv=None):
                    default="bambu", help="bed size and pause dialect")
     p.add_argument("--coupon", action="store_true",
                    help="emit only the two-piece joint test coupon")
-    p.add_argument("--out", default="out")
+    p.add_argument("--name", help="place label for the output folder, e.g. "
+                                  "'lower manhattan'")
+    p.add_argument("--out", help="output folder (default: prints/<style>/"
+                                 "<name>_<shape>_<size>mm)")
     a = p.parse_args(argv)
+    if not a.out:
+        a.out = default_out(a)
 
     cols, rows = [int(v) for v in a.grid.lower().split("x")]
     pts = None
@@ -98,10 +124,18 @@ def main(argv=None):
             p.error(f"outline needs {a.span/1000:.1f} km per tile: buildings would be "
                     f"far below nozzle size and Overpass would time out. Pick a "
                     f"smaller area (a neighbourhood, island or park).")
+    elif a.place:
+        from .shapes import lookup_place
+        try:
+            hit_pt = lookup_place(a.place)
+        except RuntimeError as exc:
+            p.error(str(exc))
+        lat, lon = hit_pt["lat"], hit_pt["lon"]
+        print(f"place: {hit_pt['name']}\n  -> centred {lat:.5f},{lon:.5f}")
     elif a.center:
         lat, lon = [float(v) for v in a.center.split(",")]
     else:
-        p.error("give --center, --outline, --route or --route-gpx")
+        p.error("give --place, --center, --outline, --route or --route-gpx")
 
     if a.style != "classic" and (a.terrain or a.joint != "none" or pts):
         p.error(f"--style {a.style} supports flat sets with --joint none, no route yet")

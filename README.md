@@ -19,45 +19,62 @@ python3 -m venv .venv
 
 ## Use
 
+Every run writes to `prints/<style>/<place>_<shape>_<size>mm/` unless you pass
+`--out`; `--name` sets the place part (outlines name themselves).
+
+```
+prints/
+  classic/     lower-manhattan_heart_190mm/   tile_r0c0.stl  plate.3mf ...
+  pixel/       lower-manhattan_square_190mm_4mm-blocks/
+  lithophane/  lower-manhattan_heart_150mm/
+               photos/
+  tests/       joint-coupon/
+```
+
 ```bash
+# any place by name, anywhere: landmark, address, neighbourhood or city
+.venv/bin/python -m tilemaker --place "Eiffel Tower, Paris" --grid 1x1 --tile 150 \
+    --span 800 --joint none --water --printer ender3v3se
+# -> prints/classic/eiffel-tower_square_150mm/
+
 # flat city, 3x3 @ 60mm, captive magnets
 .venv/bin/python -m tilemaker --center 40.7484,-73.9857 --grid 3x3 \
     --joint magnet --magnet-mode embed
 
 # framed land-only piece: water left unprinted, piers kept
 .venv/bin/python -m tilemaker --center 40.7075,-74.0090 --grid 1x1 --tile 190 \
-    --span 1600 --joint none --water --printer ender3v3se --out out_lower_manhattan
+    --span 1600 --joint none --water --printer ender3v3se --name "lower manhattan"
 
 # pixel-art style: the city snapped to a grid of 2.5 mm cube columns
 .venv/bin/python -m tilemaker --center 40.7045,-74.0125 --grid 1x1 --tile 150 \
     --span 800 --joint none --water --style pixel --pixel 2.5 --base-h 2.5 \
-    --max-bld-h 30 --printer ender3v3se --out out_pixel_lower_manhattan
+    --max-bld-h 30 --printer ender3v3se --name "manhattan tip"
 
 # lithophane of the city: a 3 mm backlit plate, water and streets glow
 .venv/bin/python -m tilemaker --center 40.7075,-74.0090 --grid 1x1 --tile 150 \
     --span 1600 --joint none --water --style lithophane --printer ender3v3se \
-    --out out_lithophane_lower_manhattan
+    --name "lower manhattan"
 
 # heart-shaped map lithophane: border follows the shape, water still glows
 .venv/bin/python -m tilemaker --center 40.7075,-74.0090 --grid 1x1 --tile 150 \
     --span 1600 --joint none --water --shape heart --style lithophane \
-    --printer ender3v3se --out out_lithophane_heart_lower_manhattan
+    --printer ender3v3se --name "lower manhattan"
 
 # lithophane of any photo
-.venv/bin/python -m tilemaker.lithophane photo.jpg --width 150 --out out_lithophane
+.venv/bin/python -m tilemaker.lithophane photo.jpg --width 150   # -> prints/lithophane/photos/
 
 # cut to a shape (heart, circle, hexagon) or to a named outline
 .venv/bin/python -m tilemaker --center 40.7075,-74.0090 --grid 1x1 --tile 190 \
-    --span 1600 --joint none --water --shape heart --out out_heart
+    --span 1600 --joint none --water --shape heart --name "lower manhattan"
 .venv/bin/python -m tilemaker --outline "Roosevelt Island, New York" --grid 1x1 \
-    --tile 190 --joint none --out out_roosevelt
+    --tile 190 --joint none
 
 # with terrain
 .venv/bin/python -m tilemaker --center 37.8024,-122.4058 --grid 2x2 --terrain \
-    --joint magnet --magnet-mode embed --out out_sf
+    --joint magnet --magnet-mode embed --name "san francisco"
 
-.venv/bin/python check.py out/*.stl                    # print-readiness audit
-openscad -o out/preview.png out/assembly.scad          # assembled render
+.venv/bin/python check.py prints/classic/*/*.stl     # print-readiness audit
+cd prints/classic/<set> && openscad -o preview.png assembly.scad   # assembled render
 ```
 
 | set | scale | tiles | result |
@@ -217,7 +234,7 @@ python -m tilemaker --center 0,0 --coupon --printer ender3v3se --magnet-mode glu
 # 2. then a real set
 python -m tilemaker --center 40.7484,-73.9857 --grid 2x2 \
     --printer ender3v3se --magnet-mode glue --lowpoly
-python check.py --printer=ender3v3se out/*.stl
+python check.py --printer=ender3v3se prints/classic/*/*.stl
 ```
 
 Two things had to change for this printer, and both were real blockers:
