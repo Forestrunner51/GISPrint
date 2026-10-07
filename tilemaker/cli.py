@@ -27,6 +27,8 @@ def default_out(a):
         parts.append(a.grid.lower())
     if a.style == "pixel":
         parts.append(f"{a.pixel:g}mm-blocks")
+    if a.couple:
+        parts.append("couple")
     return os.path.join("prints", a.style, "_".join(parts))
 
 
@@ -90,6 +92,9 @@ def main(argv=None):
                    default="square", help="cut the whole set to this shape")
     p.add_argument("--outline", help="cut the set to a named OSM area, e.g. "
                                      "'Roosevelt Island' -- also centres and sizes it")
+    p.add_argument("--couple", help="stand two figures holding hands at this spot: "
+                                    "'center', a place name, or lat,lon")
+    p.add_argument("--couple-h", type=float, default=18.0, help="figure height, mm")
     p.add_argument("--relations", action="store_true",
                    help="include building multipolygons (slow, 504s on large areas)")
     p.add_argument("--format", choices=["stl", "3mf", "both"], default="both")
@@ -137,6 +142,8 @@ def main(argv=None):
     else:
         p.error("give --place, --center, --outline, --route or --route-gpx")
 
+    if a.couple and a.style == "lithophane":
+        p.error("--couple stands figures on a 3D map; lithophanes are flat plates")
     if a.style != "classic" and (a.terrain or a.joint != "none" or pts):
         p.error(f"--style {a.style} supports flat sets with --joint none, no route yet")
     if a.joint == "magnet":
@@ -235,6 +242,30 @@ def main(argv=None):
     print(f"geometry: {len(blds)} buildings, roads={'yes' if roads else 'no'}"
           + (", route ridge" if ribbon is not None else ""))
 
+    couple_xy = figs = None
+    if a.couple:
+        from .figures import couple
+        spot = a.couple.strip()
+        if spot.lower() == "center":
+            clat, clon = lat, lon
+        elif all(v.replace(".", "").replace("-", "").strip().isdigit()
+                 for v in spot.split(",")) and spot.count(",") == 1:
+            clat, clon = [float(v) for v in spot.split(",")]
+        else:
+            from .shapes import lookup_place
+            hit_c = lookup_place(spot)
+            clat, clon = hit_c["lat"], hit_c["lon"]
+        mx, my = plane.xy(clon, clat)
+        couple_xy = (mx * scale, my * scale)
+        figs = couple(a.style, a.couple_h)
+        half_w, half_h = cols * a.tile / 2.0, rows * a.tile / 2.0
+        if not (abs(couple_xy[0]) < half_w and abs(couple_xy[1]) < half_h):
+            p.error(f"--couple spot {clat:.5f},{clon:.5f} is outside the map")
+        if water is not None and water.contains(
+                __import__("shapely").geometry.Point(couple_xy)):
+            p.error("--couple spot is on water or outside the shape; pick a spot on land")
+        print(f"couple: {a.couple_h:g} mm figures at {clat:.5f},{clon:.5f}")
+
     relief = None
     if a.terrain:
         from .dem import DEM
@@ -265,6 +296,9 @@ def main(argv=None):
                 "tiles": []}
     meshes = []
 
+    stem = os.path.basename(os.path.normpath(a.out))
+    if not stem.startswith(a.style):
+        stem = f"{a.style}_{stem}"           # e.g. lithophane_lower-manhattan_...
     for j in range(rows):
         for i in range(cols):
             cx = (i + 0.5) * a.tile - cols * a.tile / 2.0
@@ -288,10 +322,18 @@ def main(argv=None):
             else:
                 mesh = build_tile((cx, cy), a.tile, blds, roads, opts, relief=relief,
                                   route=ribbon, water=water)
-            name = f"tile_r{j}c{i}"
+            # files carry the set's name so they stay recognisable once
+            # loaded into a slicer; multi-tile sets add the grid position
+            name = stem if rows * cols == 1 else f"{stem}_r{j}c{i}"
             if mesh is None:
                 print(f"--  {name}: all water, nothing to print")
                 continue
+            if couple_xy and abs(couple_xy[0] - cx) < a.tile / 2 \
+                    and abs(couple_xy[1] - cy) < a.tile / 2:
+                from .figures import place as place_figs
+                placed = place_figs(mesh, figs, *couple_xy)
+                if placed is not None:
+                    mesh = placed
             mesh.apply_translation((-cx, -cy, 0))   # each tile prints at origin
             if a.format in ("stl", "both"):
                 mesh.export(os.path.join(a.out, name + ".stl"))
@@ -328,7 +370,7 @@ def main(argv=None):
                 fh.write(f"| {g['edge']} | {g['xy'][0]:.2f} | {g['xy'][1]:.2f} "
                          f"| **{g['pole']}** |\n")
     if a.format in ("3mf", "both"):
-        path = os.path.join(a.out, "plate.3mf")
+        path = os.path.join(a.out, f"{stem}_plate.3mf")
         info = write_project(path, meshes, tile_mm=a.tile, pause_z=pause_z,
                              title=f"Map tiles 1:{round(1000/scale)}",
                              printer=a.printer)
@@ -346,7 +388,8 @@ def main(argv=None):
     with open(os.path.join(a.out, "assembly.scad"), "w") as fh:
         fh.write(f"gap = 0;\nfor (j=[0:{rows-1}]) for (i=[0:{cols-1}])\n"
                  f"  translate([i*({a.tile}+gap), j*({a.tile}+gap), 0])\n"
-                 f'    import(str("tile_r", j, "c", i, ".stl"));\n')
+                 + (f'    import("{stem}.stl");\n' if rows * cols == 1 else
+                  f'    import(str("{stem}_r", j, "c", i, ".stl"));\n'))
     with open(os.path.join(a.out, "manifest.json"), "w") as fh:
         json.dump(manifest, fh, indent=2)
     print(f"\nwrote {len(manifest['tiles'])} tiles -> {a.out}/")

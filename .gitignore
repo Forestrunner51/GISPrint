@@ -13,3 +13,6 @@ prints/
 *.stl
 *.3mf
 !docs/*.png
+
+# macOS Finder
+.DS_Store

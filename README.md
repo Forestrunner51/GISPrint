@@ -20,11 +20,13 @@ python3 -m venv .venv
 ## Use
 
 Every run writes to `prints/<style>/<place>_<shape>_<size>mm/` unless you pass
-`--out`; `--name` sets the place part (outlines name themselves).
+`--out`; `--name` sets the place part (outlines name themselves). Files inside
+are named `<style>_<folder>.stl` and `<style>_<folder>_plate.3mf` (multi-tile
+sets add `_r0c0`, `_r0c1`, ...), so they stay recognisable in a slicer.
 
 ```
 prints/
-  classic/     lower-manhattan_heart_190mm/   tile_r0c0.stl  plate.3mf ...
+  classic/     lower-manhattan_heart_190mm/   classic_lower-manhattan_heart_190mm.stl
   pixel/       lower-manhattan_square_190mm_4mm-blocks/
   lithophane/  lower-manhattan_heart_150mm/
                photos/
@@ -36,6 +38,11 @@ prints/
 .venv/bin/python -m tilemaker --place "Eiffel Tower, Paris" --grid 1x1 --tile 150 \
     --span 800 --joint none --water --printer ender3v3se
 # -> prints/classic/eiffel-tower_square_150mm/
+
+# a couple holding hands at their spot (classic: smooth, pixel: blocky)
+.venv/bin/python -m tilemaker --place "Main Street Garden Park, Dallas" --grid 1x1 \
+    --tile 190 --span 700 --joint none --shape heart --vscale 0.54 \
+    --couple center --printer ender3v3se
 
 # flat city, 3x3 @ 60mm, captive magnets
 .venv/bin/python -m tilemaker --center 40.7484,-73.9857 --grid 3x3 \
@@ -286,6 +293,9 @@ whole set.
   water. Outlines come from Nominatim and auto-fit centre and span; anything
   needing more than 4 km per tile is refused (buildings below nozzle size,
   Overpass timeouts), so a state or country is not a city-map product.
+- `--couple` (`figures.py`) stands two ~18 mm figures at a spot ('center', a
+  place name or lat,lon). Deliberately not to scale -- a person at 1:4000 is
+  0.5 mm. Support needed is under 0.1% of surface (heads, the hand bridge).
 - Water and shape cuts are applied to the finished tile in one boolean pass.
   Clipping the base and the buildings to a curved shore separately gave two
   walls on one line that disagree by float noise: 2-6 four-face edges per
